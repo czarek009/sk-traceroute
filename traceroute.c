@@ -29,14 +29,14 @@ u_int16_t compute_icmp_checksum(const void *buff, int length) {
 }
 
 
-void create_packet(struct icmphdr* packet, uint16_t seqential_number) {
+void create_packet(struct icmphdr* packet, uint16_t sequential) {
     assert(packet != NULL);
 
     packet->type = ICMP_ECHO;
     packet->code = 0;
     packet->un.echo.id = getpid();
-    packet->un.echo.sequence = seqential_number;
-    packet->checksum = 0;
+    packet->un.echo.sequence = sequential;
+    packet->checksum = 0; // trzeba najpierw wyzerować, żeby dobrze policzyło checksum
     packet->checksum = compute_icmp_checksum(packet, sizeof(struct icmphdr));
 }
 
@@ -83,9 +83,35 @@ bool recv_response(int socket_fd, int ttl, const char* address) {
       exit(EXIT_FAILURE);
     }
 
+    struct iphdr* ip_header = (struct iphdr*)buffer;
+    ssize_t ip_header_size  = 4 * ip_header->ihl;
+    struct icmphdr* icmp_header = (struct icmphdr*)(buffer+ip_header_size);
+    int id = icmp_header->un.echo.id;
+    int sequential_number = icmp_header->un.echo.sequence;
+    
+    if (icmp_header->type == ICMP_TIME_EXCEEDED) {
+      void *original_packet = (uint8_t*)icmp_header + sizeof(struct icmphdr);
+      struct iphdr* org_ip_header = (struct iphdr*)original_packet;
+      ssize_t org_ip_header_size  = 4 * org_ip_header->ihl;
+      struct icmphdr* org_icmp_header = (struct icmphdr*)((uint8_t*)original_packet + org_ip_header_size);
+      int org_id = org_icmp_header->un.echo.id;
+      int org_sequential_number = org_icmp_header->un.echo.sequence;
+
+      if (org_id != getpid() || org_sequential_number>>2 != ttl) {
+        continue;
+      }
+    } else if (icmp_header->type == ICMP_ECHOREPLY) {
+      if (id != getpid() || sequential_number>>2 != ttl) {
+        continue;
+      }
+    } else {
+      continue;
+    }
+    
+    responders[responses].ip = malloc(4);
     const char* sender_ip = inet_ntop(AF_INET, 
                                       &sender.sin_addr,
-                                      &responders[responses].ip, 
+                                      responders[responses].ip, 
                                       20);
 
     if (sender_ip == NULL) {
@@ -93,28 +119,35 @@ bool recv_response(int socket_fd, int ttl, const char* address) {
         exit(EXIT_FAILURE);
     }
 
-    /* Jakieś wykrywanie, czy to aby na pewno dobry pakiet? */
-    //printf("sender_ip: %s\n", responders[responses].ip);
+    responders[responses].time.tv_usec = 1000000 - time.tv_usec;
+    
     ++responses;
   }
   
-  for (int i = 0; i < responses; ++i) {
-    bool unique = true;
+  uint64_t time_total = 0;
+  bool dest_responded = false;
 
-    for (int j = 0; j < i; j++) {
+  for (int i = 0; i < responses; ++i) {
+    bool print_addr = true;
+    time_total += responders[i].time.tv_usec;
+
+    for (int j = 0; j < i; ++j) {
       if (strcmp(responders[i].ip, responders[j].ip) == 0) {
-        unique = false;
+        print_addr = false;
         break;
       } 
     }
 
-    if (unique) {
+    if (print_addr) {
       printf("%s ", responders[i].ip);
     }
     if (strcmp(responders[i].ip, address) == 0) {
-      printf("\n");
-      return true;
+      dest_responded = true;
     } 
+  }
+  if (responses) {
+    uint64_t average = time_total / 1000 / 3;
+    printf("%ldms", average);
   }
 
   if (responses == 0) {
@@ -123,20 +156,21 @@ bool recv_response(int socket_fd, int ttl, const char* address) {
     printf("??? ");
   }
 
-  //printf(" a powinno być: ");
-  //for (int i = 0; i < 14; ++i) {
-  //  printf("%c", addr->sa_data[i]);
-  //}
-  //printf(" a powinno być: %s", addr->sa_data);
-  printf("\n");
+  printf("\n"); 
 
-
-
-  return false;
+  return dest_responded;
 }
 
 
-void traceroute(const struct sockaddr* addr, int socket_fd, const char* address) {
+void traceroute(const char* address, int socket_fd) {
+
+  struct sockaddr addr = {0};
+  addr.sa_family = AF_INET;
+  if (inet_pton(AF_INET, address, &addr.sa_data[2]) != 1) {
+    fprintf(stderr, "inet_pton() error: %s is not valid ip address; %s\n", address, strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+
   for (int ttl = 1; ttl <= 32; ++ttl) {
     for (uint8_t i = 0; i < 3; ++i) {
       struct icmphdr packet;
@@ -147,18 +181,11 @@ void traceroute(const struct sockaddr* addr, int socket_fd, const char* address)
         exit(EXIT_FAILURE);
       }
 
-      /* send packet */
-      //size_t bytes_sent;
-      //if((bytes_sent = send(socket_fd, &packet, sizeof(packet), 0)) == -1) {
-      //  fprintf(stderr, "send() error: %s\n", strerror(errno));
-      //  exit(EXIT_FAILURE);
-      //}
-
       ssize_t bytes = sendto(socket_fd,
                              &packet,
                              sizeof(struct icmphdr),
                              0,
-                             addr,
+                             &addr,
                              sizeof(struct sockaddr));
       if (bytes == -1) {
         fprintf(stderr, "sendto() error: %s\n", strerror(errno));
@@ -168,8 +195,8 @@ void traceroute(const struct sockaddr* addr, int socket_fd, const char* address)
         fprintf(stderr, "sendto() error: sent %ld out od %ld bytes\n", bytes, sizeof(packet));
         exit(EXIT_FAILURE);
       }
-      // sprawdzanie czy wysłano wszystko?
     }
+
     /* receive packets */
     if (recv_response(socket_fd, ttl, address)) {
       break;

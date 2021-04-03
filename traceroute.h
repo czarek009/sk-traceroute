@@ -13,11 +13,11 @@
 #define TIMEOUT 0
 
 typedef struct responders {
-    char ip[20];
+    char *ip;
     struct timeval time;
 } responders_t;
 
 
-void traceroute(const struct sockaddr* addr, int socket_fd, const char* address);
+void traceroute(const char* address, int socket_fd);
 
 #endif
