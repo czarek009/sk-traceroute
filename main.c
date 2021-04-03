@@ -30,6 +30,7 @@ int main(int argc, char* argv[]) {
       fprintf(stderr, "socket() error: %s\n", strerror(errno));
       return EXIT_FAILURE;
   }
+  //printf("Kupa dupa: %s\n", address);
 
   /*
   if (!bind(socket_fd, (struct sockaddr*)&addr, sizeof(addr))) {
@@ -39,7 +40,7 @@ int main(int argc, char* argv[]) {
   */
   
   /* traceroute */
-  traceroute(&addr, socket_fd);
+  traceroute(&addr, socket_fd, address);
 
   close(socket_fd);
 

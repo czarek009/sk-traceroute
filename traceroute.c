@@ -36,45 +36,113 @@ void create_packet(struct icmphdr* packet, uint16_t seqential_number) {
     packet->code = 0;
     packet->un.echo.id = getpid();
     packet->un.echo.sequence = seqential_number;
-    //packet->checksum = 0;
+    packet->checksum = 0;
     packet->checksum = compute_icmp_checksum(packet, sizeof(struct icmphdr));
 }
 
 
-bool recv_response(int socket_fd, uint8_t ttl) {
+bool recv_response(int socket_fd, int ttl, const char* address) {
 
+  uint8_t responses = 0;
   struct timeval time;
   time.tv_sec = 1;
   time.tv_usec = 0;
-  uint8_t responses = 0;
+
+  responders_t responders[3] = {0};
+
+  printf("%d. ", ttl);
 
   while (responses < 3) {
+
+    fd_set descriptors;
+    FD_ZERO(&descriptors);
+    FD_SET(socket_fd, &descriptors);
+    int ready = select(socket_fd+1, &descriptors, NULL, NULL, &time);
+    
+    if (ready < 0) {
+      fprintf(stderr, "select() error: %s\n", strerror(errno));
+      exit(EXIT_FAILURE);
+    }
+    if (ready == TIMEOUT) {
+      break;
+    }
+
     struct sockaddr_in sender;
     socklen_t sender_len = sizeof(sender);
     u_int8_t buffer[IP_MAXPACKET];
 
-    ssize_t packet_len = recvfrom(socket_fd, 
-                                  buffer, IP_MAXPACKET, 
-                                  0, 
-                                  (struct sockaddr*)&sender, 
-                                  &sender_len);
 
-    char ip_str[20];
-    inet_ntop (AF_INET, &(sender.sin_addr), ip_str, sizeof(ip_str));
-    printf ("IP packet with ICMP content from: %s\n", ip_str);
+    ssize_t packet_len = recvfrom(socket_fd, 
+                 buffer, IP_MAXPACKET, 
+                 0, 
+                 (struct sockaddr*)&sender, 
+                 &sender_len);
+
+    if (packet_len == -1) {
+      fprintf(stderr, "recvfrom() error: %s\n", strerror(errno));
+      exit(EXIT_FAILURE);
+    }
+
+    const char* sender_ip = inet_ntop(AF_INET, 
+                                      &sender.sin_addr,
+                                      &responders[responses].ip, 
+                                      20);
+
+    if (sender_ip == NULL) {
+        perror("inet_ntop");
+        exit(EXIT_FAILURE);
+    }
+
+    /* Jakieś wykrywanie, czy to aby na pewno dobry pakiet? */
+    //printf("sender_ip: %s\n", responders[responses].ip);
+    ++responses;
+  }
+  
+  for (int i = 0; i < responses; ++i) {
+    bool unique = true;
+
+    for (int j = 0; j < i; j++) {
+      if (strcmp(responders[i].ip, responders[j].ip) == 0) {
+        unique = false;
+        break;
+      } 
+    }
+
+    if (unique) {
+      printf("%s ", responders[i].ip);
+    }
+    if (strcmp(responders[i].ip, address) == 0) {
+      printf("\n");
+      return true;
+    } 
   }
 
-  return true;
+  if (responses == 0) {
+    printf("* ");
+  } else if (responses < 3) {
+    printf("??? ");
+  }
+
+  //printf(" a powinno być: ");
+  //for (int i = 0; i < 14; ++i) {
+  //  printf("%c", addr->sa_data[i]);
+  //}
+  //printf(" a powinno być: %s", addr->sa_data);
+  printf("\n");
+
+
+
+  return false;
 }
 
 
-void traceroute(const struct sockaddr* addr, int socket_fd) {
-  for (uint8_t ttl = 1; ttl <= 32; ++ttl) {
+void traceroute(const struct sockaddr* addr, int socket_fd, const char* address) {
+  for (int ttl = 1; ttl <= 32; ++ttl) {
     for (uint8_t i = 0; i < 3; ++i) {
       struct icmphdr packet;
       create_packet(&packet, seq_num(ttl, i));
 
-      if (!setsockopt(socket_fd, IPPROTO_IP, IP_TTL, &ttl, sizeof(int))) {
+      if (setsockopt(socket_fd, IPPROTO_IP, IP_TTL, &ttl, sizeof(int)) == -1) {
         fprintf(stderr, "setsockopt() error: %s\n", strerror(errno));
         exit(EXIT_FAILURE);
       }
@@ -86,18 +154,25 @@ void traceroute(const struct sockaddr* addr, int socket_fd) {
       //  exit(EXIT_FAILURE);
       //}
 
-      if (sendto(socket_fd,
-                 &packet,
-                 sizeof(struct icmphdr),
-                 0,
-                 addr,
-                 sizeof(struct sockaddr)) == -1) {
+      ssize_t bytes = sendto(socket_fd,
+                             &packet,
+                             sizeof(struct icmphdr),
+                             0,
+                             addr,
+                             sizeof(struct sockaddr));
+      if (bytes == -1) {
         fprintf(stderr, "sendto() error: %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+      }
+      if (bytes != sizeof(packet)) {
+        fprintf(stderr, "sendto() error: sent %ld out od %ld bytes\n", bytes, sizeof(packet));
         exit(EXIT_FAILURE);
       }
       // sprawdzanie czy wysłano wszystko?
     }
     /* receive packets */
-    recv_response(socket_fd, ttl);
+    if (recv_response(socket_fd, ttl, address)) {
+      break;
+    }
   }
 }

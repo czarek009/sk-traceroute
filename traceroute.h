@@ -10,9 +10,14 @@
 #include <netinet/in.h>
 
 
-#define TIMEOUT -16
+#define TIMEOUT 0
+
+typedef struct responders {
+    char ip[20];
+    struct timeval time;
+} responders_t;
 
 
-void traceroute(const struct sockaddr* addr, int socket_fd);
+void traceroute(const struct sockaddr* addr, int socket_fd, const char* address);
 
 #endif
