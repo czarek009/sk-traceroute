@@ -1,3 +1,4 @@
+// Cezary Stajszczyk 317354
 #include "traceroute.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -146,8 +147,8 @@ bool recv_response(int socket_fd, int ttl, const char* address) {
     } 
   }
   if (responses) {
-    uint64_t average = time_total / 1000 / 3;
-    printf("%ldms", average);
+    uint64_t average = time_total / 1000 / responses;
+    printf("%ldms ", average);
   }
 
   if (responses == 0) {
